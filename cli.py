@@ -138,6 +138,19 @@ def interactive_mode() -> int:
         return 1
 
 
+def _find_field(row: dict, candidates: List[str]) -> Optional[str]:
+    """Helper to match field names case-insensitively and with underscore/space normalization."""
+    normalized_row = {
+        k.strip().lower().replace(" ", "_").replace("-", "_"): (k, v)
+        for k, v in row.items() if k is not None
+    }
+    for cand in candidates:
+        cand_norm = cand.lower().replace(" ", "_").replace("-", "_")
+        if cand_norm in normalized_row:
+            return normalized_row[cand_norm][1]
+    return None
+
+
 def process_batch_csv(input_csv: str, output_csv: Optional[str] = None) -> int:
     """Processes batch CSV file containing patient lab values."""
     try:
@@ -147,13 +160,40 @@ def process_batch_csv(input_csv: str, output_csv: Optional[str] = None) -> int:
 
         results = []
         for r in rows:
-            pid = r.get("patient_id") or r.get("id") or "PT-001"
-            ca = float(r.get("calcium") or r.get("serum_calcium") or 9.0)
-            po4 = float(r.get("phosphate") or r.get("serum_phosphate") or 4.5)
-            alb = float(r.get("albumin") or r.get("serum_albumin") or 4.0)
-            pth_raw = r.get("pth") or r.get("intact_pth")
-            pth = float(pth_raw) if pth_raw else None
-            warf = str(r.get("on_warfarin", "false")).lower() in ("true", "1", "yes")
+            pid = _find_field(r, ["patient_id", "patient id", "id", "pt_id", "pt id", "accession"]) or "PT-001"
+            
+            # Calcium field candidates
+            ca_raw = _find_field(r, ["total_calcium", "total_calcium_mg_dl", "serum_calcium", "calcium", "serum_total_calcium", "ca", "v1"])
+            ca = float(ca_raw) if ca_raw is not None and ca_raw != "" else 9.0
+            
+            # Albumin field candidates
+            alb_raw = _find_field(r, ["serum_albumin", "albumin", "serum_albumin_g_dl", "alb", "v2"])
+            alb = float(alb_raw) if alb_raw is not None and alb_raw != "" else 4.0
+
+            # Phosphate field candidates
+            po4_raw = _find_field(r, ["serum_phosphate", "phosphate", "serum_phosphate_mg_dl", "po4", "phosphorus", "v3"])
+            po4 = float(po4_raw) if po4_raw is not None and po4_raw != "" else 4.5
+
+            pth_raw = _find_field(r, ["intact_pth", "intact_pth_pg_ml", "pth", "pth_pg_ml", "ipth"])
+            pth = float(pth_raw) if pth_raw and pth_raw != "" else None
+
+            warf_raw = _find_field(r, ["on_warfarin", "warfarin", "warfarin_use", "coumadin"]) or "false"
+            warf = str(warf_raw).strip().lower() in ("true", "1", "yes", "y")
+
+            vintage_raw = _find_field(r, ["dialysis_vintage_years", "dialysis_vintage", "vintage_years", "vintage"])
+            vintage = float(vintage_raw) if vintage_raw and vintage_raw != "" else 0.0
+
+            bmi_raw = _find_field(r, ["bmi", "body_mass_index"])
+            bmi = float(bmi_raw) if bmi_raw and bmi_raw != "" else 24.0
+
+            dm_raw = _find_field(r, ["diabetes", "diabetes_mellitus", "dm"]) or "false"
+            dm = str(dm_raw).strip().lower() in ("true", "1", "yes", "y")
+
+            female_raw = _find_field(r, ["female_sex", "female", "sex_f", "is_female"]) or "false"
+            female = str(female_raw).strip().lower() in ("true", "1", "yes", "y", "f")
+
+            calc_raw = _find_field(r, ["has_vascular_calcification", "vascular_calcification", "calcification"]) or "false"
+            calc = str(calc_raw).strip().lower() in ("true", "1", "yes", "y")
 
             bio = PatientBiomarkersInput(
                 patient_id=pid,
@@ -161,7 +201,12 @@ def process_batch_csv(input_csv: str, output_csv: Optional[str] = None) -> int:
                 serum_phosphate=po4,
                 serum_albumin=alb,
                 intact_pth_pg_ml=pth,
-                on_warfarin=warf
+                on_warfarin=warf,
+                dialysis_vintage_years=vintage,
+                bmi=bmi,
+                diabetes=dm,
+                female_sex=female,
+                has_vascular_calcification=calc
             )
             rep = CalciumPhosphateCalculator.evaluate_case(bio)
             row_dict = dict(r)
@@ -169,8 +214,11 @@ def process_batch_csv(input_csv: str, output_csv: Optional[str] = None) -> int:
             row_dict["ca_po4_product_mg2_dl2"] = rep.product_data.product_mg2_dl2
             row_dict["ca_po4_product_mmol2_l2"] = rep.product_data.product_mmol2_l2
             row_dict["kdigo_target_achieved"] = rep.product_data.kdigo_target_achieved
+            row_dict["risk_category"] = rep.product_data.risk_category.value
             row_dict["calciphylaxis_hazard_score"] = rep.calciphylaxis_risk.hazard_score
+            row_dict["calciphylaxis_tier"] = rep.calciphylaxis_risk.estimated_risk_tier
             row_dict["recommended_binder_class"] = rep.pharmacotherapy.recommended_binder_class.name
+            row_dict["clinical_recommendation"] = rep.pharmacotherapy.clinical_rationale
             results.append(row_dict)
 
         if output_csv:
@@ -187,10 +235,20 @@ def process_batch_csv(input_csv: str, output_csv: Optional[str] = None) -> int:
         return 1
 
 
-def main(argv: Optional[List[str]] = None) -> int:
+def build_parser() -> argparse.ArgumentParser:
+    """Builds the command-line interface argument parser."""
     parser = argparse.ArgumentParser(
         description="Calcium-Phosphate Product (Ca x PO4) & CKD-MBD Calculator (KDIGO Guidelines)"
     )
+
+    # Subparsers for command-style invocation: cli.py batch -i input.csv -o output.csv
+    subparsers = parser.add_subparsers(dest="subcommand", help="Subcommand to execute")
+    
+    batch_parser = subparsers.add_parser("batch", help="Batch process patient records from a CSV file")
+    batch_parser.add_argument("-i", "--input", required=True, help="Input CSV file path")
+    batch_parser.add_argument("-o", "--output", help="Output CSV or JSON file path")
+
+    # Top-level flags and direct evaluation arguments
     parser.add_argument("--interactive", "-i", action="store_true", help="Launch interactive clinical mode")
     parser.add_argument("--demo", choices=["target_controlled", "elevated_high_risk", "critical_calciphylaxis", "si_metric_case", "all"], help="Run benchmark demo scenario")
     parser.add_argument("--patient-id", default="PT-001", help="Patient accession identifier")
@@ -211,7 +269,15 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--file", "-f", help="Load patient JSON file")
     parser.add_argument("--json", "-j", action="store_true", help="Output report in JSON format")
 
+    return parser
+
+
+def main(argv: Optional[List[str]] = None) -> int:
+    parser = build_parser()
     args = parser.parse_args(argv)
+
+    if args.subcommand == "batch":
+        return process_batch_csv(args.input, args.output)
 
     if args.interactive:
         return interactive_mode()

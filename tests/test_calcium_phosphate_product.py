@@ -217,6 +217,36 @@ class TestCLIExecution(unittest.TestCase):
             self.assertEqual(ret, 0)
             self.assertTrue(os.path.exists(csv_out))
 
+    def test_cli_batch_subcommand(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            csv_in = os.path.join(tmpdir, "test_in.csv")
+            csv_out = os.path.join(tmpdir, "test_out.csv")
+            with open(csv_in, "w", newline="", encoding="utf-8") as f:
+                writer = csv.DictWriter(f, fieldnames=["patient_id", "total_calcium", "serum_phosphate", "serum_albumin"])
+                writer.writeheader()
+                writer.writerow({"patient_id": "PT-SUB1", "total_calcium": "9.2", "serum_phosphate": "4.8", "serum_albumin": "3.8"})
+
+            ret = cli.main(["batch", "-i", csv_in, "-o", csv_out])
+            self.assertEqual(ret, 0)
+            self.assertTrue(os.path.exists(csv_out))
+            with open(csv_out, "r", encoding="utf-8") as f:
+                reader = list(csv.DictReader(f))
+                self.assertEqual(len(reader), 1)
+                self.assertEqual(reader[0]["patient_id"], "PT-SUB1")
+                self.assertIn("ca_po4_product_mg2_dl2", reader[0])
+
+    def test_cli_batch_sample_csv(self):
+        sample_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "sample.csv")
+        if os.path.exists(sample_path):
+            with tempfile.TemporaryDirectory() as tmpdir:
+                out_path = os.path.join(tmpdir, "sample_out.csv")
+                ret = cli.main(["batch", "-i", sample_path, "-o", out_path])
+                self.assertEqual(ret, 0)
+                self.assertTrue(os.path.exists(out_path))
+                with open(out_path, "r", encoding="utf-8") as f:
+                    rows = list(csv.DictReader(f))
+                    self.assertGreaterEqual(len(rows), 5)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,4 +1,9 @@
-Patient_ID,v1,v2,v3
-PT-101,14.5,4.2,1.8
-PT-102,8.0,2.1,0.5
-PT-103,28.4,12.0,5.5
+patient_id,ckd_stage,serum_calcium,serum_albumin,serum_phosphate,intact_pth,on_warfarin,dialysis_vintage_years,bmi,diabetes,female_sex,has_vascular_calcification
+PT-CKD1-01,Stage 1,9.4,4.2,3.4,42.0,false,0.0,23.5,false,false,false
+PT-CKD3-02,Stage 3b,9.1,3.9,4.2,85.0,false,0.0,26.8,true,true,false
+PT-CKD4-03,Stage 4,8.8,3.6,5.1,165.0,false,0.0,28.2,true,false,false
+PT-CKD5-04,Stage 5,8.4,3.2,6.2,380.0,false,0.0,24.7,false,true,true
+PT-CKD5D-HD05,Stage 5D (HD),9.6,3.8,6.8,490.0,false,3.5,27.4,true,false,true
+PT-CKD5D-PD06,Stage 5D (PD),8.9,3.1,5.4,310.0,false,2.0,25.0,false,true,false
+PT-CKD5D-CUA07,Stage 5D (HD),10.2,2.8,7.9,680.0,true,6.2,33.1,true,true,true
+PT-CKD5D-OPT08,Stage 5D (HD),9.0,4.0,4.4,195.0,false,1.5,24.5,false,false,false
