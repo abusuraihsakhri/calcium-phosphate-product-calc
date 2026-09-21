@@ -2,37 +2,49 @@ name: CI
 
 on:
   push:
-    branches: [ master, main ]
+    branches: [master, main]
   pull_request:
-    branches: [ master, main ]
+    branches: [master, main]
+
+permissions:
+  contents: read
 
 jobs:
   test:
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
-        python-version: ["3.10", "3.11", "3.12"]
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
 
     steps:
-    - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-    - name: Set up Python ${{ matrix.python-version }}
-      uses: actions/setup-python@v5
-      with:
-        python-version: ${{ matrix.python-version }}
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
 
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install pytest
+      - name: Install test dependency
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pytest
 
-    - name: Run Pytest Suite
-      run: |
-        python -m pytest -p no:zarr -v
+      - name: Compile Python sources
+        run: python -m compileall -q .
 
-    - name: Run CLI Batch Smoke Test
-      run: |
-        python cli.py batch -i sample.csv -o out_smoke.csv
-        test -s out_smoke.csv
-        rm -f out_smoke.csv
+      - name: Run test suite
+        run: python -m pytest -q
 
+      - name: Run CLI batch smoke test
+        run: |
+          python cli.py batch -i sample.csv -o out_smoke.csv
+          test -s out_smoke.csv
+          rm -f out_smoke.csv
+
+      - name: Validate static app entry point
+        run: |
+          test -s index.html
+          grep -q 'name="viewport"' index.html
+          grep -q '>Calculate<' index.html
+          ! grep -qi 'Enterprise Automated Analytical Suite' index.html
