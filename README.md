@@ -1,5 +1,7 @@
 # Calcium-Phosphate Product Calculator
 
+### [Open the Live Application →](https://abusuraihsakhri.github.io/calcium-phosphate-product-calc/)
+
 A small browser and Python utility for calculating the calcium-phosphate product (Ca × P), converting between US conventional and SI units, and optionally showing an albumin-adjusted calcium estimate.
 
 ## Clinical scope
