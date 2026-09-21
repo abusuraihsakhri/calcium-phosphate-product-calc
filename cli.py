@@ -1,10 +1,5 @@
 #!/usr/bin/env python3
-"""
-Command-Line Interface for Calcium-Phosphate Product & CKD-MBD Calculator
-=========================================================================
-Supports interactive clinical entry, direct parameter evaluation, batch CSV processing,
-unit system conversions (US Conventional and SI Metric), and JSON output.
-"""
+"""Command-line interface for the calcium-phosphate product calculator."""
 
 from __future__ import annotations
 
@@ -15,260 +10,186 @@ import sys
 from typing import List, Optional
 
 from calcium_phosphate_product import (
-    UnitSystem,
-    PatientBiomarkersInput,
     CalciumPhosphateCalculator,
+    PatientBiomarkersInput,
+    UnitSystem,
     format_ckd_mbd_report,
 )
 
 
 def run_demo(scenario: str = "all") -> int:
-    """Runs pre-configured clinical benchmark scenarios."""
     scenarios = {
-        "target_controlled": PatientBiomarkersInput(
-            patient_id="DEMO-CKD-CONTROLLED",
-            serum_calcium=9.0,
-            serum_phosphate=4.5,
-            serum_albumin=4.0,
-            intact_pth_pg_ml=180.0,
-            on_warfarin=False
+        "below_historical_threshold": PatientBiomarkersInput(
+            "DEMO-BELOW-55", 9.0, 4.5, 4.0
         ),
-        "elevated_high_risk": PatientBiomarkersInput(
-            patient_id="DEMO-CKD-ELEVATED",
-            serum_calcium=9.8,
-            serum_phosphate=6.4,
-            serum_albumin=3.8,
-            intact_pth_pg_ml=450.0,
-            dialysis_vintage_years=4.5
-        ),
-        "critical_calciphylaxis": PatientBiomarkersInput(
-            patient_id="DEMO-CKD-CRITICAL-CUA",
-            serum_calcium=10.2,
-            serum_phosphate=7.8,
-            serum_albumin=2.9,
-            intact_pth_pg_ml=680.0,
-            on_warfarin=True,
-            dialysis_vintage_years=6.0,
-            bmi=33.5,
-            diabetes=True,
-            female_sex=True,
-            has_vascular_calcification=True
+        "above_historical_threshold": PatientBiomarkersInput(
+            "DEMO-ABOVE-55", 9.8, 6.4, 3.8
         ),
         "si_metric_case": PatientBiomarkersInput(
-            patient_id="DEMO-SI-METRIC",
-            serum_calcium=2.35,  # mmol/L
-            serum_phosphate=1.65, # mmol/L
-            serum_albumin=38.0,  # g/L
-            unit_system=UnitSystem.SI_METRIC
-        )
+            "DEMO-SI", 2.25, 1.7, 35.0, unit_system=UnitSystem.SI_METRIC
+        ),
+    }
+    aliases = {
+        "target_controlled": "below_historical_threshold",
+        "elevated_high_risk": "above_historical_threshold",
+        "critical_calciphylaxis": "above_historical_threshold",
     }
 
-    selected = scenarios.items() if scenario == "all" else [(scenario, scenarios[scenario])] if scenario in scenarios else []
-    if not selected:
-        print(f"Unknown scenario: {scenario}. Choose from: {list(scenarios.keys())} or 'all'")
-        return 1
+    if scenario == "all":
+        selected = scenarios.items()
+    else:
+        key = aliases.get(scenario, scenario)
+        selected = [(key, scenarios[key])]
 
-    for name, bio in selected:
-        rep = CalciumPhosphateCalculator.evaluate_case(bio)
-        print(format_ckd_mbd_report(rep))
-        print("\n")
+    for name, patient in selected:
+        print(f"\n--- {name} ---")
+        print(format_ckd_mbd_report(CalciumPhosphateCalculator.evaluate_case(patient)))
     return 0
 
 
 def interactive_mode() -> int:
-    """Guides user through interactive clinical biomarker entry."""
-    print("=" * 60)
-    print(" Calcium-Phosphate Product & CKD-MBD - Interactive Entry")
-    print("=" * 60)
+    print("Calcium-Phosphate Product Calculator")
+    print("Local calculation only. Do not use Ca x P as a standalone treatment target.")
     try:
-        pat_id = input("Enter Patient ID [PT-2026-001]: ").strip() or "PT-2026-001"
-        units_opt = input("Unit system: (1) US Conventional [mg/dL, g/dL], (2) SI Metric [mmol/L, g/L] [1]: ").strip() or "1"
-        unit_sys = UnitSystem.SI_METRIC if units_opt == "2" else UnitSystem.US_CONVENTIONAL
-
-        if unit_sys == UnitSystem.US_CONVENTIONAL:
-            ca_str = input("Serum Total Calcium (mg/dL) [9.2]: ").strip() or "9.2"
-            po4_str = input("Serum Phosphate (mg/dL) [5.0]: ").strip() or "5.0"
-            alb_str = input("Serum Albumin (g/dL) [4.0]: ").strip() or "4.0"
-        else:
-            ca_str = input("Serum Total Calcium (mmol/L) [2.30]: ").strip() or "2.30"
-            po4_str = input("Serum Phosphate (mmol/L) [1.60]: ").strip() or "1.60"
-            alb_str = input("Serum Albumin (g/L) [40.0]: ").strip() or "40.0"
-
-        ca = float(ca_str)
-        po4 = float(po4_str)
-        alb = float(alb_str)
-
-        pth_str = input("Intact PTH (pg/mL, or enter to skip): ").strip()
-        pth = float(pth_str) if pth_str else None
-
-        warf_str = input("Patient on Warfarin / Coumadin? (y/n) [n]: ").strip().lower()
-        warf = warf_str in ("y", "yes", "true", "1")
-
-        vintage_str = input("Dialysis vintage in years [0.0]: ").strip() or "0.0"
-        vintage = float(vintage_str)
-
-        bmi_str = input("BMI (kg/m2) [25.0]: ").strip() or "25.0"
-        bmi = float(bmi_str)
-
-        dm_str = input("Diabetes Mellitus? (y/n) [n]: ").strip().lower()
-        dm = dm_str in ("y", "yes", "true", "1")
-
-        fem_str = input("Female sex? (y/n) [n]: ").strip().lower()
-        fem = fem_str in ("y", "yes", "true", "1")
-
+        ca = float(input("Total calcium (mg/dL): ").strip())
+        po4 = float(input("Phosphate (mg/dL): ").strip())
+        albumin_raw = input("Albumin (g/dL) [4.0]: ").strip()
+        albumin = float(albumin_raw) if albumin_raw else 4.0
         bio = PatientBiomarkersInput(
-            patient_id=pat_id,
+            patient_id="INTERACTIVE",
             serum_calcium=ca,
             serum_phosphate=po4,
-            serum_albumin=alb,
-            intact_pth_pg_ml=pth,
-            unit_system=unit_sys,
-            on_warfarin=warf,
-            dialysis_vintage_years=vintage,
-            bmi=bmi,
-            diabetes=dm,
-            female_sex=fem
+            serum_albumin=albumin,
         )
-
-        rep = CalciumPhosphateCalculator.evaluate_case(bio)
-        print("\n" + format_ckd_mbd_report(rep))
+        print(format_ckd_mbd_report(CalciumPhosphateCalculator.evaluate_case(bio)))
         return 0
-    except Exception as e:
-        print(f"Error during interactive calculation: {e}", file=sys.stderr)
-        return 1
+    except (ValueError, EOFError) as exc:
+        print(f"Input error: {exc}", file=sys.stderr)
+        return 2
 
 
 def _find_field(row: dict, candidates: List[str]) -> Optional[str]:
-    """Helper to match field names case-insensitively and with underscore/space normalization."""
-    normalized_row = {
-        k.strip().lower().replace(" ", "_").replace("-", "_"): (k, v)
-        for k, v in row.items() if k is not None
+    normalized = {
+        key.strip().lower().replace(" ", "_").replace("-", "_"): value
+        for key, value in row.items()
+        if key is not None
     }
-    for cand in candidates:
-        cand_norm = cand.lower().replace(" ", "_").replace("-", "_")
-        if cand_norm in normalized_row:
-            return normalized_row[cand_norm][1]
+    for candidate in candidates:
+        candidate = candidate.lower().replace(" ", "_").replace("-", "_")
+        if candidate in normalized:
+            return normalized[candidate]
     return None
 
 
+def _as_bool(value: Optional[str]) -> bool:
+    return str(value or "").strip().lower() in {"true", "1", "yes", "y"}
+
+
 def process_batch_csv(input_csv: str, output_csv: Optional[str] = None) -> int:
-    """Processes batch CSV file containing patient lab values."""
     try:
-        with open(input_csv, mode="r", encoding="utf-8-sig") as f:
-            reader = csv.DictReader(f)
-            rows = list(reader)
+        with open(input_csv, newline="", encoding="utf-8-sig") as handle:
+            rows = list(csv.DictReader(handle))
+        if not rows:
+            raise ValueError("input CSV contains no data rows")
 
         results = []
-        for r in rows:
-            pid = _find_field(r, ["patient_id", "patient id", "id", "pt_id", "pt id", "accession"]) or "PT-001"
-            
-            # Calcium field candidates
-            ca_raw = _find_field(r, ["total_calcium", "total_calcium_mg_dl", "serum_calcium", "calcium", "serum_total_calcium", "ca", "v1"])
-            ca = float(ca_raw) if ca_raw is not None and ca_raw != "" else 9.0
-            
-            # Albumin field candidates
-            alb_raw = _find_field(r, ["serum_albumin", "albumin", "serum_albumin_g_dl", "alb", "v2"])
-            alb = float(alb_raw) if alb_raw is not None and alb_raw != "" else 4.0
+        for index, row in enumerate(rows, start=1):
+            pid = _find_field(row, ["patient_id", "patient id", "id", "accession"]) or f"ROW-{index}"
+            ca_raw = _find_field(row, ["total_calcium", "serum_calcium", "calcium", "ca", "v1"])
+            po4_raw = _find_field(row, ["serum_phosphate", "phosphate", "phosphorus", "po4", "v3"])
+            alb_raw = _find_field(row, ["serum_albumin", "albumin", "alb", "v2"])
 
-            # Phosphate field candidates
-            po4_raw = _find_field(r, ["serum_phosphate", "phosphate", "serum_phosphate_mg_dl", "po4", "phosphorus", "v3"])
-            po4 = float(po4_raw) if po4_raw is not None and po4_raw != "" else 4.5
-
-            pth_raw = _find_field(r, ["intact_pth", "intact_pth_pg_ml", "pth", "pth_pg_ml", "ipth"])
-            pth = float(pth_raw) if pth_raw and pth_raw != "" else None
-
-            warf_raw = _find_field(r, ["on_warfarin", "warfarin", "warfarin_use", "coumadin"]) or "false"
-            warf = str(warf_raw).strip().lower() in ("true", "1", "yes", "y")
-
-            vintage_raw = _find_field(r, ["dialysis_vintage_years", "dialysis_vintage", "vintage_years", "vintage"])
-            vintage = float(vintage_raw) if vintage_raw and vintage_raw != "" else 0.0
-
-            bmi_raw = _find_field(r, ["bmi", "body_mass_index"])
-            bmi = float(bmi_raw) if bmi_raw and bmi_raw != "" else 24.0
-
-            dm_raw = _find_field(r, ["diabetes", "diabetes_mellitus", "dm"]) or "false"
-            dm = str(dm_raw).strip().lower() in ("true", "1", "yes", "y")
-
-            female_raw = _find_field(r, ["female_sex", "female", "sex_f", "is_female"]) or "false"
-            female = str(female_raw).strip().lower() in ("true", "1", "yes", "y", "f")
-
-            calc_raw = _find_field(r, ["has_vascular_calcification", "vascular_calcification", "calcification"]) or "false"
-            calc = str(calc_raw).strip().lower() in ("true", "1", "yes", "y")
+            if ca_raw in (None, "") or po4_raw in (None, ""):
+                raise ValueError(f"row {index}: calcium and phosphate are required")
 
             bio = PatientBiomarkersInput(
-                patient_id=pid,
-                serum_calcium=ca,
-                serum_phosphate=po4,
-                serum_albumin=alb,
-                intact_pth_pg_ml=pth,
-                on_warfarin=warf,
-                dialysis_vintage_years=vintage,
-                bmi=bmi,
-                diabetes=dm,
-                female_sex=female,
-                has_vascular_calcification=calc
+                patient_id=str(pid),
+                serum_calcium=float(ca_raw),
+                serum_phosphate=float(po4_raw),
+                serum_albumin=float(alb_raw) if alb_raw not in (None, "") else 4.0,
+                on_warfarin=_as_bool(_find_field(row, ["on_warfarin", "warfarin"])),
+                dialysis_vintage_years=float(
+                    _find_field(row, ["dialysis_vintage_years", "dialysis_vintage"]) or 0.0
+                ),
+                bmi=float(_find_field(row, ["bmi", "body_mass_index"]) or 24.0),
+                diabetes=_as_bool(_find_field(row, ["diabetes", "diabetes_mellitus", "dm"])),
+                female_sex=_as_bool(_find_field(row, ["female_sex", "female", "is_female"])),
+                has_vascular_calcification=_as_bool(
+                    _find_field(row, ["has_vascular_calcification", "vascular_calcification"])
+                ),
             )
-            rep = CalciumPhosphateCalculator.evaluate_case(bio)
-            row_dict = dict(r)
-            row_dict["corrected_calcium_mg_dl"] = rep.product_data.corrected_calcium_mg_dl
-            row_dict["ca_po4_product_mg2_dl2"] = rep.product_data.product_mg2_dl2
-            row_dict["ca_po4_product_mmol2_l2"] = rep.product_data.product_mmol2_l2
-            row_dict["kdigo_target_achieved"] = rep.product_data.kdigo_target_achieved
-            row_dict["risk_category"] = rep.product_data.risk_category.value
-            row_dict["calciphylaxis_hazard_score"] = rep.calciphylaxis_risk.hazard_score
-            row_dict["calciphylaxis_tier"] = rep.calciphylaxis_risk.estimated_risk_tier
-            row_dict["recommended_binder_class"] = rep.pharmacotherapy.recommended_binder_class.name
-            row_dict["clinical_recommendation"] = rep.pharmacotherapy.clinical_rationale
-            results.append(row_dict)
+            report = CalciumPhosphateCalculator.evaluate_case(bio)
+            p = report.product_data
+            out = dict(row)
+            out.update(
+                {
+                    "measured_calcium_mg_dl": p.measured_calcium_mg_dl,
+                    "albumin_adjusted_calcium_mg_dl": p.corrected_calcium_mg_dl,
+                    "phosphate_mg_dl": p.phosphate_mg_dl,
+                    "measured_ca_po4_mg2_dl2": p.measured_product_mg2_dl2,
+                    "albumin_adjusted_ca_po4_mg2_dl2": p.product_mg2_dl2,
+                    "historical_kdoqi_below_55": p.historical_kdoqi_below_55,
+                    "interpretation_note": (
+                        "Current KDIGO guidance favors individual calcium/phosphate values "
+                        "and serial trends rather than Ca x P as a treatment target."
+                    ),
+                }
+            )
+            results.append(out)
 
         if output_csv:
-            with open(output_csv, mode="w", encoding="utf-8", newline="") as f:
-                writer = csv.DictWriter(f, fieldnames=list(results[0].keys()))
+            fieldnames = list(results[0].keys())
+            with open(output_csv, "w", newline="", encoding="utf-8") as handle:
+                writer = csv.DictWriter(handle, fieldnames=fieldnames)
                 writer.writeheader()
                 writer.writerows(results)
-            print(f"Successfully processed {len(results)} records -> {output_csv}")
+            print(f"Processed {len(results)} records -> {output_csv}")
         else:
             print(json.dumps(results, indent=2))
         return 0
-    except Exception as e:
-        print(f"Error in batch processing: {e}", file=sys.stderr)
+    except (OSError, ValueError, TypeError) as exc:
+        print(f"Batch processing error: {exc}", file=sys.stderr)
         return 1
 
 
 def build_parser() -> argparse.ArgumentParser:
-    """Builds the command-line interface argument parser."""
     parser = argparse.ArgumentParser(
-        description="Calcium-Phosphate Product (Ca x PO4) & CKD-MBD Calculator (KDIGO Guidelines)"
+        description="Calculate calcium-phosphate product and unit conversions."
     )
+    subparsers = parser.add_subparsers(dest="subcommand")
+    batch = subparsers.add_parser("batch", help="Process a CSV file")
+    batch.add_argument("-i", "--input", required=True)
+    batch.add_argument("-o", "--output")
 
-    # Subparsers for command-style invocation: cli.py batch -i input.csv -o output.csv
-    subparsers = parser.add_subparsers(dest="subcommand", help="Subcommand to execute")
-    
-    batch_parser = subparsers.add_parser("batch", help="Batch process patient records from a CSV file")
-    batch_parser.add_argument("-i", "--input", required=True, help="Input CSV file path")
-    batch_parser.add_argument("-o", "--output", help="Output CSV or JSON file path")
-
-    # Top-level flags and direct evaluation arguments
-    parser.add_argument("--interactive", "-i", action="store_true", help="Launch interactive clinical mode")
-    parser.add_argument("--demo", choices=["target_controlled", "elevated_high_risk", "critical_calciphylaxis", "si_metric_case", "all"], help="Run benchmark demo scenario")
-    parser.add_argument("--patient-id", default="PT-001", help="Patient accession identifier")
-    parser.add_argument("--calcium", type=float, default=9.0, help="Serum total calcium (mg/dL or mmol/L)")
-    parser.add_argument("--phosphate", type=float, default=4.5, help="Serum inorganic phosphate (mg/dL or mmol/L)")
-    parser.add_argument("--albumin", type=float, default=4.0, help="Serum albumin (g/dL or g/L)")
-    parser.add_argument("--pth", type=float, help="Intact parathyroid hormone PTH (pg/mL)")
-    parser.add_argument("--si-units", action="store_true", help="Input values are in SI Metric units (mmol/L and g/L)")
-    parser.add_argument("--warfarin", action="store_true", help="Patient is currently receiving Warfarin anticoagulant therapy")
-    parser.add_argument("--dialysis-vintage", type=float, default=0.0, help="Duration on chronic dialysis in years")
-    parser.add_argument("--bmi", type=float, default=24.0, help="Body Mass Index in kg/m2")
-    parser.add_argument("--diabetes", action="store_true", help="Diabetes mellitus present")
-    parser.add_argument("--female", action="store_true", help="Female patient sex")
-    parser.add_argument("--calcification", action="store_true", help="Known vascular or valvular calcification")
-
-    parser.add_argument("--batch-csv", help="Input CSV file for batch calculation")
-    parser.add_argument("--output", "-o", help="Output file path (CSV or JSON)")
-    parser.add_argument("--file", "-f", help="Load patient JSON file")
-    parser.add_argument("--json", "-j", action="store_true", help="Output report in JSON format")
-
+    parser.add_argument("--interactive", "-i", action="store_true")
+    parser.add_argument(
+        "--demo",
+        choices=[
+            "below_historical_threshold",
+            "above_historical_threshold",
+            "target_controlled",
+            "elevated_high_risk",
+            "critical_calciphylaxis",
+            "si_metric_case",
+            "all",
+        ],
+    )
+    parser.add_argument("--patient-id", default="CASE")
+    parser.add_argument("--calcium", type=float, default=9.0)
+    parser.add_argument("--phosphate", type=float, default=4.5)
+    parser.add_argument("--albumin", type=float, default=4.0)
+    parser.add_argument("--pth", type=float)
+    parser.add_argument("--si-units", action="store_true")
+    parser.add_argument("--warfarin", action="store_true")
+    parser.add_argument("--dialysis-vintage", type=float, default=0.0)
+    parser.add_argument("--bmi", type=float, default=24.0)
+    parser.add_argument("--diabetes", action="store_true")
+    parser.add_argument("--female", action="store_true")
+    parser.add_argument("--calcification", action="store_true")
+    parser.add_argument("--batch-csv")
+    parser.add_argument("--output", "-o")
+    parser.add_argument("--file", "-f")
+    parser.add_argument("--json", "-j", action="store_true")
     return parser
 
 
@@ -278,65 +199,58 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     if args.subcommand == "batch":
         return process_batch_csv(args.input, args.output)
-
     if args.interactive:
         return interactive_mode()
-
     if args.demo:
         return run_demo(args.demo)
-
     if args.batch_csv:
         return process_batch_csv(args.batch_csv, args.output)
 
-    if args.file:
-        with open(args.file, "r") as fp:
-            data = json.load(fp)
-        unit_sys = UnitSystem(data.get("unit_system", UnitSystem.US_CONVENTIONAL.value))
-        bio = PatientBiomarkersInput(
-            patient_id=data.get("patient_id", "FILE-PT"),
-            serum_calcium=data.get("serum_calcium", 9.0),
-            serum_phosphate=data.get("serum_phosphate", 4.5),
-            serum_albumin=data.get("serum_albumin", 4.0),
-            intact_pth_pg_ml=data.get("intact_pth_pg_ml"),
-            unit_system=unit_sys,
-            on_warfarin=data.get("on_warfarin", False),
-            dialysis_vintage_years=data.get("dialysis_vintage_years", 0.0),
-            bmi=data.get("bmi", 24.0),
-            diabetes=data.get("diabetes", False),
-            female_sex=data.get("female_sex", False),
-            has_vascular_calcification=data.get("has_vascular_calcification", False)
-        )
-    else:
-        unit_sys = UnitSystem.SI_METRIC if args.si_units else UnitSystem.US_CONVENTIONAL
-        bio = PatientBiomarkersInput(
-            patient_id=args.patient_id,
-            serum_calcium=args.calcium,
-            serum_phosphate=args.phosphate,
-            serum_albumin=args.albumin,
-            intact_pth_pg_ml=args.pth,
-            unit_system=unit_sys,
-            on_warfarin=args.warfarin,
-            dialysis_vintage_years=args.dialysis_vintage,
-            bmi=args.bmi,
-            diabetes=args.diabetes,
-            female_sex=args.female,
-            has_vascular_calcification=args.calcification
-        )
+    try:
+        if args.file:
+            with open(args.file, encoding="utf-8") as handle:
+                data = json.load(handle)
+            bio = PatientBiomarkersInput(
+                patient_id=str(data.get("patient_id", "CASE")),
+                serum_calcium=float(data["serum_calcium"]),
+                serum_phosphate=float(data["serum_phosphate"]),
+                serum_albumin=float(data.get("serum_albumin", 4.0)),
+                intact_pth_pg_ml=data.get("intact_pth_pg_ml"),
+                unit_system=UnitSystem(data.get("unit_system", UnitSystem.US_CONVENTIONAL.value)),
+                on_warfarin=bool(data.get("on_warfarin", False)),
+                dialysis_vintage_years=float(data.get("dialysis_vintage_years", 0.0)),
+                bmi=float(data.get("bmi", 24.0)),
+                diabetes=bool(data.get("diabetes", False)),
+                female_sex=bool(data.get("female_sex", False)),
+                has_vascular_calcification=bool(data.get("has_vascular_calcification", False)),
+            )
+        else:
+            bio = PatientBiomarkersInput(
+                patient_id=args.patient_id,
+                serum_calcium=args.calcium,
+                serum_phosphate=args.phosphate,
+                serum_albumin=args.albumin,
+                intact_pth_pg_ml=args.pth,
+                unit_system=UnitSystem.SI_METRIC if args.si_units else UnitSystem.US_CONVENTIONAL,
+                on_warfarin=args.warfarin,
+                dialysis_vintage_years=args.dialysis_vintage,
+                bmi=args.bmi,
+                diabetes=args.diabetes,
+                female_sex=args.female,
+                has_vascular_calcification=args.calcification,
+            )
 
-    report = CalciumPhosphateCalculator.evaluate_case(bio)
-
-    if args.json:
-        out_str = report.to_json()
-    else:
-        out_str = format_ckd_mbd_report(report)
-
-    if args.output:
-        with open(args.output, "w") as fp:
-            fp.write(out_str)
-    else:
-        print(out_str)
-
-    return 0
+        report = CalciumPhosphateCalculator.evaluate_case(bio)
+        output = report.to_json() if args.json else format_ckd_mbd_report(report)
+        if args.output:
+            with open(args.output, "w", encoding="utf-8") as handle:
+                handle.write(output)
+        else:
+            print(output)
+        return 0
+    except (OSError, KeyError, ValueError, TypeError, json.JSONDecodeError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 2
 
 
 if __name__ == "__main__":
