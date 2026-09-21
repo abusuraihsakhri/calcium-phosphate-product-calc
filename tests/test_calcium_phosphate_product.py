@@ -1,9 +1,4 @@
-"""
-Unit Test Suite for Calcium-Phosphate Product & CKD-MBD Calculator
-===================================================================
-Comprehensive verification of Payne albumin-correction formulas, Ca x PO4 products,
-KDIGO clinical thresholds, calciphylaxis hazard model, phosphate binder selection, and CLI.
-"""
+"""Regression tests for the calcium-phosphate product calculator."""
 
 import csv
 import json
@@ -11,241 +6,206 @@ import os
 import tempfile
 import unittest
 
+import cli
 from calcium_phosphate_product import (
-    UnitSystem,
-    RiskCategory,
     BinderClass,
-    PatientBiomarkersInput,
-    ProductCalculationResult,
-    CalciphylaxisRiskAssessment,
-    BinderRecommendation,
-    CkdMbdReport,
     CalciumPhosphateCalculator,
+    PatientBiomarkersInput,
+    RiskCategory,
+    UnitSystem,
     format_ckd_mbd_report,
 )
-import cli
+from calciphylaxis_risk import CalciphylaxisInputs, predict_calciphylaxis_risk
+from phosphate_binder_optimizer import BinderContext, select_binder
+from trend_analysis import CaPO4Measurement, analyze_caPO4_trend
 
 
-class TestPayneAlbuminCorrectionAndChemistry(unittest.TestCase):
-    """Test albumin correction and unit conversions."""
+class TestChemistry(unittest.TestCase):
+    def test_us_albumin_adjustment(self):
+        bio = PatientBiomarkersInput("P1", 8.0, 4.5, 2.5)
+        result = CalciumPhosphateCalculator.calculate_product(bio)
+        self.assertAlmostEqual(result.corrected_calcium_mg_dl, 9.2, places=2)
 
-    def test_corrected_calcium_normal_albumin_us(self):
-        # Ca 9.2, Albumin 4.0 -> Corrected Ca = 9.2 + 0.8*(4.0 - 4.0) = 9.2
-        bio = PatientBiomarkersInput("P1", serum_calcium=9.2, serum_phosphate=4.0, serum_albumin=4.0)
-        res = CalciumPhosphateCalculator.calculate_product(bio)
-        self.assertAlmostEqual(res.corrected_calcium_mg_dl, 9.2, places=2)
-
-    def test_corrected_calcium_hypoalbuminemia_us(self):
-        # Ca 8.0, Albumin 2.5 -> Corrected Ca = 8.0 + 0.8*(4.0 - 2.5) = 8.0 + 1.2 = 9.2
-        bio = PatientBiomarkersInput("P2", serum_calcium=8.0, serum_phosphate=4.5, serum_albumin=2.5)
-        res = CalciumPhosphateCalculator.calculate_product(bio)
-        self.assertAlmostEqual(res.corrected_calcium_mg_dl, 9.2, places=2)
-
-    def test_corrected_calcium_si_units(self):
-        # Ca 2.1 mmol/L, Albumin 30 g/L -> Corrected Ca = 2.1 + 0.02*(40 - 30) = 2.1 + 0.2 = 2.3 mmol/L
-        bio = PatientBiomarkersInput("P3", serum_calcium=2.1, serum_phosphate=1.5, serum_albumin=30.0, unit_system=UnitSystem.SI_METRIC)
-        res = CalciumPhosphateCalculator.calculate_product(bio)
-        self.assertAlmostEqual(res.corrected_calcium_mmol_l, 2.3, places=2)
-
-    def test_product_calculation_math(self):
-        # Corrected Ca 9.0, Phosphate 5.0 -> Product = 45.0 mg2/dL2
-        bio = PatientBiomarkersInput("P4", serum_calcium=9.0, serum_phosphate=5.0, serum_albumin=4.0)
-        res = CalciumPhosphateCalculator.calculate_product(bio)
-        self.assertAlmostEqual(res.product_mg2_dl2, 45.0, places=2)
-        self.assertTrue(res.kdigo_target_achieved)
-        self.assertEqual(res.risk_category, RiskCategory.TARGET_OPTIMAL)
-
-    def test_product_conversion_to_si(self):
-        bio = PatientBiomarkersInput("P5", serum_calcium=10.0, serum_phosphate=5.0, serum_albumin=4.0)
-        res = CalciumPhosphateCalculator.calculate_product(bio)
-        self.assertAlmostEqual(res.product_mg2_dl2, 50.0, places=1)
-        # 50.0 * 0.08056 ~ 4.03 mmol2/L2
-        self.assertAlmostEqual(res.product_mmol2_l2, 4.03, places=1)
-
-
-class TestKdigoRiskStratification(unittest.TestCase):
-    """Test KDIGO / KDOQI clinical thresholds."""
-
-    def test_kdigo_target_optimal_under_55(self):
-        bio = PatientBiomarkersInput("P-OPT", serum_calcium=8.8, serum_phosphate=5.2, serum_albumin=4.0)
-        # 8.8 * 5.2 = 45.76 < 55.0
-        res = CalciumPhosphateCalculator.calculate_product(bio)
-        self.assertTrue(res.kdigo_target_achieved)
-        self.assertEqual(res.risk_category, RiskCategory.TARGET_OPTIMAL)
-
-    def test_kdigo_elevated_risk_55_to_70(self):
-        bio = PatientBiomarkersInput("P-ELEV", serum_calcium=9.6, serum_phosphate=6.5, serum_albumin=4.0)
-        # 9.6 * 6.5 = 62.4
-        res = CalciumPhosphateCalculator.calculate_product(bio)
-        self.assertFalse(res.kdigo_target_achieved)
-        self.assertEqual(res.risk_category, RiskCategory.ELEVATED_RISK)
-
-    def test_kdigo_critical_risk_above_70(self):
-        bio = PatientBiomarkersInput("P-CRIT", serum_calcium=10.2, serum_phosphate=7.5, serum_albumin=4.0)
-        # 10.2 * 7.5 = 76.5 >= 70.0
-        res = CalciumPhosphateCalculator.calculate_product(bio)
-        self.assertFalse(res.kdigo_target_achieved)
-        self.assertEqual(res.risk_category, RiskCategory.CRITICAL_RISK)
-
-
-class TestCalciphylaxisHazardModel(unittest.TestCase):
-    """Test multivariable calciphylaxis risk scoring."""
-
-    def test_baseline_low_risk(self):
-        bio = PatientBiomarkersInput("P-LOW", serum_calcium=9.0, serum_phosphate=4.5, serum_albumin=4.0)
-        rep = CalciumPhosphateCalculator.evaluate_case(bio)
-        self.assertLess(rep.calciphylaxis_risk.hazard_score, 25.0)
-        self.assertEqual(rep.calciphylaxis_risk.estimated_risk_tier, "Low Calciphylaxis Risk")
-        self.assertFalse(rep.calciphylaxis_risk.warfarin_contraindication_alert)
-
-    def test_warfarin_hazard_increase_and_alert(self):
-        bio = PatientBiomarkersInput("P-WARF", serum_calcium=9.8, serum_phosphate=6.2, serum_albumin=3.2, on_warfarin=True)
-        rep = CalciumPhosphateCalculator.evaluate_case(bio)
-        self.assertTrue(rep.calciphylaxis_risk.warfarin_contraindication_alert)
-        self.assertTrue(any("Warfarin" in f for f in rep.calciphylaxis_risk.active_risk_factors))
-        self.assertGreaterEqual(rep.calciphylaxis_risk.hazard_score, 50.0)
-
-    def test_critical_composite_calciphylaxis(self):
+    def test_si_albumin_adjustment(self):
         bio = PatientBiomarkersInput(
-            patient_id="P-CUA-HIGH",
-            serum_calcium=10.5,
-            serum_phosphate=8.0,
-            serum_albumin=2.8,
-            on_warfarin=True,
-            dialysis_vintage_years=5.0,
-            bmi=34.0,
-            diabetes=True,
-            female_sex=True
+            "P2", 2.1, 1.5, 30.0, unit_system=UnitSystem.SI_METRIC
         )
-        rep = CalciumPhosphateCalculator.evaluate_case(bio)
-        self.assertGreaterEqual(rep.calciphylaxis_risk.hazard_score, 75.0)
-        self.assertIn("Critical", rep.calciphylaxis_risk.estimated_risk_tier)
-        self.assertTrue(any("CRITICAL" in a for a in rep.critical_alerts))
+        result = CalciumPhosphateCalculator.calculate_product(bio)
+        self.assertAlmostEqual(result.corrected_calcium_mmol_l, 2.3, places=2)
 
+    def test_measured_and_adjusted_products_are_both_reported(self):
+        bio = PatientBiomarkersInput("P3", 8.0, 5.0, 2.5)
+        result = CalciumPhosphateCalculator.calculate_product(bio)
+        self.assertAlmostEqual(result.measured_product_mg2_dl2, 40.0, places=2)
+        self.assertAlmostEqual(result.product_mg2_dl2, 46.0, places=2)
 
-class TestPhosphateBinderOptimization(unittest.TestCase):
-    """Test KDIGO phosphate binder selection rules."""
+    def test_product_unit_conversion(self):
+        bio = PatientBiomarkersInput("P4", 10.0, 5.0, 4.0)
+        result = CalciumPhosphateCalculator.calculate_product(bio)
+        self.assertAlmostEqual(result.product_mmol2_l2, 4.03, places=2)
 
-    def test_calcium_binder_permitted_normal_ca_low_product(self):
-        bio = PatientBiomarkersInput("P-BIND-CA", serum_calcium=8.8, serum_phosphate=5.2, serum_albumin=4.0)
-        rep = CalciumPhosphateCalculator.evaluate_case(bio)
-        self.assertEqual(rep.pharmacotherapy.recommended_binder_class, BinderClass.CALCIUM_BASED)
-        self.assertTrue(rep.pharmacotherapy.calcium_binder_permitted)
+    def test_historical_threshold_context_below(self):
+        result = CalciumPhosphateCalculator.calculate_product(
+            PatientBiomarkersInput("P5", 9.0, 5.0, 4.0)
+        )
+        self.assertTrue(result.historical_kdoqi_below_55)
+        self.assertEqual(
+            result.risk_category,
+            RiskCategory.BELOW_HISTORICAL_KDOQI_THRESHOLD,
+        )
+        self.assertTrue(result.kdigo_target_achieved)  # compatibility alias only
 
-    def test_non_calcium_binder_mandatory_for_high_product(self):
-        bio = PatientBiomarkersInput("P-BIND-NONCA", serum_calcium=9.2, serum_phosphate=6.8, serum_albumin=4.0)
-        # Product = 9.2 * 6.8 = 62.56 >= 55.0
-        rep = CalciumPhosphateCalculator.evaluate_case(bio)
-        self.assertEqual(rep.pharmacotherapy.recommended_binder_class, BinderClass.NON_CALCIUM_BASED)
-        self.assertFalse(rep.pharmacotherapy.calcium_binder_permitted)
+    def test_historical_threshold_context_above(self):
+        result = CalciumPhosphateCalculator.calculate_product(
+            PatientBiomarkersInput("P6", 10.0, 6.0, 4.0)
+        )
+        self.assertFalse(result.historical_kdoqi_below_55)
+        self.assertEqual(
+            result.risk_category,
+            RiskCategory.AT_OR_ABOVE_HISTORICAL_KDOQI_THRESHOLD,
+        )
 
-    def test_non_calcium_binder_mandatory_for_hypercalcemia(self):
-        bio = PatientBiomarkersInput("P-BIND-HYPERCA", serum_calcium=10.2, serum_phosphate=4.8, serum_albumin=4.0)
-        rep = CalciumPhosphateCalculator.evaluate_case(bio)
-        self.assertEqual(rep.pharmacotherapy.recommended_binder_class, BinderClass.NON_CALCIUM_BASED)
-        self.assertFalse(rep.pharmacotherapy.calcium_binder_permitted)
-
-    def test_calcimimetic_indicated_elevated_pth(self):
-        bio = PatientBiomarkersInput("P-PTH", serum_calcium=9.2, serum_phosphate=5.5, serum_albumin=4.0, intact_pth_pg_ml=550.0)
-        rep = CalciumPhosphateCalculator.evaluate_case(bio)
-        self.assertTrue(rep.pharmacotherapy.calcimimetic_indicated)
-
-
-class TestValidationAndReporting(unittest.TestCase):
-    """Test validation errors, JSON serialization, and text report formatting."""
-
-    def test_negative_calcium_raises_error(self):
-        bio = PatientBiomarkersInput("P-ERR", serum_calcium=-2.0, serum_phosphate=4.0)
+    def test_non_finite_input_rejected(self):
         with self.assertRaises(ValueError):
-            CalciumPhosphateCalculator.calculate_product(bio)
+            CalciumPhosphateCalculator.calculate_product(
+                PatientBiomarkersInput("BAD", float("nan"), 4.0, 4.0)
+            )
 
-    def test_negative_phosphate_raises_error(self):
-        bio = PatientBiomarkersInput("P-ERR2", serum_calcium=9.0, serum_phosphate=-1.0)
+    def test_negative_input_rejected(self):
         with self.assertRaises(ValueError):
-            CalciumPhosphateCalculator.calculate_product(bio)
-
-    def test_json_and_dict_serialization(self):
-        bio = PatientBiomarkersInput("P-JSON", serum_calcium=9.0, serum_phosphate=5.0)
-        rep = CalciumPhosphateCalculator.evaluate_case(bio)
-        d = rep.to_dict()
-        self.assertEqual(d["patient_id"], "P-JSON")
-        self.assertIn("product_mg2_dl2", d["product_data"])
-
-        js = rep.to_json()
-        parsed = json.loads(js)
-        self.assertEqual(parsed["patient_id"], "P-JSON")
-
-    def test_text_report_rendering(self):
-        bio = PatientBiomarkersInput("P-RENDER", serum_calcium=9.8, serum_phosphate=6.5)
-        rep = CalciumPhosphateCalculator.evaluate_case(bio)
-        txt = format_ckd_mbd_report(rep)
-        self.assertIn("CKD-MBD & CALCIUM-PHOSPHATE PRODUCT REPORT", txt)
-        self.assertIn("P-RENDER", txt)
-        self.assertIn("CALCIUM-PHOSPHATE PRODUCT", txt)
+            CalciumPhosphateCalculator.calculate_product(
+                PatientBiomarkersInput("BAD", -1.0, 4.0, 4.0)
+            )
 
 
-class TestCLIExecution(unittest.TestCase):
-    """Test CLI commands, demos, and batch CSV processing."""
+class TestClinicalBoundaries(unittest.TestCase):
+    def test_no_calciphylaxis_probability_is_generated(self):
+        report = CalciumPhosphateCalculator.evaluate_case(
+            PatientBiomarkersInput(
+                "P7", 10.0, 7.0, 3.0, on_warfarin=True, diabetes=True
+            )
+        )
+        self.assertIsNone(report.calciphylaxis_risk.hazard_score)
+        self.assertEqual(report.calciphylaxis_risk.estimated_risk_tier, "Not estimated")
+        self.assertIn("Warfarin exposure", report.calciphylaxis_risk.active_risk_factors)
+        self.assertFalse(report.calciphylaxis_risk.warfarin_contraindication_alert)
 
-    def test_cli_demos(self):
+    def test_no_automated_binder_or_calcimimetic_selection(self):
+        report = CalciumPhosphateCalculator.evaluate_case(
+            PatientBiomarkersInput("P8", 10.0, 7.0, 4.0, intact_pth_pg_ml=700)
+        )
+        recommendation = report.pharmacotherapy
+        self.assertEqual(
+            recommendation.recommended_binder_class,
+            BinderClass.NO_AUTOMATED_RECOMMENDATION,
+        )
+        self.assertIsNone(recommendation.calcium_binder_permitted)
+        self.assertIsNone(recommendation.calcimimetic_indicated)
+
+    def test_report_states_current_kdigo_context(self):
+        report = CalciumPhosphateCalculator.evaluate_case(
+            PatientBiomarkersInput("P9", 9.8, 6.5, 3.6)
+        )
+        text = format_ckd_mbd_report(report)
+        self.assertIn("KDIGO 2017", text)
+        self.assertIn("individual serum calcium and phosphate", text)
+        self.assertNotIn("CRITICAL NEPHROLOGY ALERTS", text)
+
+    def test_json_serialization(self):
+        report = CalciumPhosphateCalculator.evaluate_case(
+            PatientBiomarkersInput("JSON", 9.0, 4.5, 4.0)
+        )
+        data = json.loads(report.to_json())
+        self.assertEqual(data["patient_id"], "JSON")
+        self.assertIn("measured_product_mg2_dl2", data["product_data"])
+
+
+class TestAuxiliaryCompatibility(unittest.TestCase):
+    def test_calciphylaxis_helper_does_not_emit_probability(self):
+        result = predict_calciphylaxis_risk(
+            CalciphylaxisInputs(10.0, 7.0, 3.0, warfarin_use=True)
+        )
+        self.assertIsNone(result["probability_1y"])
+        self.assertEqual(result["risk_tier"], "not_estimated")
+
+    def test_binder_helper_does_not_select_medication(self):
+        result = select_binder(BinderContext(7.0, 9.5))
+        self.assertIsNone(result["selected_binder"])
+        self.assertIn("No automated binder selection", result["notes"][0])
+
+    def test_trend_helper_is_descriptive(self):
+        result = analyze_caPO4_trend(
+            [
+                CaPO4Measurement("2026-01-01", 9.0, 4.0),
+                CaPO4Measurement("2026-02-01", 9.0, 5.0),
+            ]
+        )
+        self.assertEqual(result["risk_level"], "not_estimated")
+        self.assertIsNone(result["calcification_risk_pct"])
+
+
+class TestCLI(unittest.TestCase):
+    def test_direct_json(self):
+        self.assertEqual(
+            cli.main(
+                [
+                    "--patient-id",
+                    "CLI",
+                    "--calcium",
+                    "9.5",
+                    "--phosphate",
+                    "6.0",
+                    "--albumin",
+                    "3.6",
+                    "--json",
+                ]
+            ),
+            0,
+        )
+
+    def test_legacy_demo_aliases_still_run(self):
         self.assertEqual(cli.main(["--demo", "target_controlled"]), 0)
         self.assertEqual(cli.main(["--demo", "elevated_high_risk"]), 0)
         self.assertEqual(cli.main(["--demo", "critical_calciphylaxis"]), 0)
-        self.assertEqual(cli.main(["--demo", "si_metric_case"]), 0)
 
-    def test_cli_direct_args_json(self):
-        ret = cli.main([
-            "--patient-id", "CLI-PT-01",
-            "--calcium", "9.5",
-            "--phosphate", "6.0",
-            "--albumin", "3.6",
-            "--json"
-        ])
-        self.assertEqual(ret, 0)
-
-    def test_cli_batch_csv(self):
+    def test_batch_subcommand(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            csv_in = os.path.join(tmpdir, "patients_in.csv")
-            csv_out = os.path.join(tmpdir, "patients_out.csv")
-            with open(csv_in, "w", newline="", encoding="utf-8") as f:
-                writer = csv.DictWriter(f, fieldnames=["patient_id", "calcium", "phosphate", "albumin"])
+            input_path = os.path.join(tmpdir, "in.csv")
+            output_path = os.path.join(tmpdir, "out.csv")
+            with open(input_path, "w", newline="", encoding="utf-8") as handle:
+                writer = csv.DictWriter(
+                    handle,
+                    fieldnames=[
+                        "patient_id",
+                        "serum_calcium",
+                        "serum_phosphate",
+                        "serum_albumin",
+                    ],
+                )
                 writer.writeheader()
-                writer.writerow({"patient_id": "PT1", "calcium": "9.0", "phosphate": "4.5", "albumin": "4.0"})
-                writer.writerow({"patient_id": "PT2", "calcium": "10.0", "phosphate": "6.5", "albumin": "3.5"})
+                writer.writerow(
+                    {
+                        "patient_id": "ROW1",
+                        "serum_calcium": "9.2",
+                        "serum_phosphate": "4.8",
+                        "serum_albumin": "3.8",
+                    }
+                )
+            self.assertEqual(
+                cli.main(["batch", "-i", input_path, "-o", output_path]), 0
+            )
+            with open(output_path, encoding="utf-8") as handle:
+                rows = list(csv.DictReader(handle))
+            self.assertEqual(len(rows), 1)
+            self.assertIn("measured_ca_po4_mg2_dl2", rows[0])
+            self.assertIn("historical_kdoqi_below_55", rows[0])
 
-            ret = cli.main(["--batch-csv", csv_in, "--output", csv_out])
-            self.assertEqual(ret, 0)
-            self.assertTrue(os.path.exists(csv_out))
-
-    def test_cli_batch_subcommand(self):
+    def test_empty_batch_is_error(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            csv_in = os.path.join(tmpdir, "test_in.csv")
-            csv_out = os.path.join(tmpdir, "test_out.csv")
-            with open(csv_in, "w", newline="", encoding="utf-8") as f:
-                writer = csv.DictWriter(f, fieldnames=["patient_id", "total_calcium", "serum_phosphate", "serum_albumin"])
-                writer.writeheader()
-                writer.writerow({"patient_id": "PT-SUB1", "total_calcium": "9.2", "serum_phosphate": "4.8", "serum_albumin": "3.8"})
-
-            ret = cli.main(["batch", "-i", csv_in, "-o", csv_out])
-            self.assertEqual(ret, 0)
-            self.assertTrue(os.path.exists(csv_out))
-            with open(csv_out, "r", encoding="utf-8") as f:
-                reader = list(csv.DictReader(f))
-                self.assertEqual(len(reader), 1)
-                self.assertEqual(reader[0]["patient_id"], "PT-SUB1")
-                self.assertIn("ca_po4_product_mg2_dl2", reader[0])
-
-    def test_cli_batch_sample_csv(self):
-        sample_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "sample.csv")
-        if os.path.exists(sample_path):
-            with tempfile.TemporaryDirectory() as tmpdir:
-                out_path = os.path.join(tmpdir, "sample_out.csv")
-                ret = cli.main(["batch", "-i", sample_path, "-o", out_path])
-                self.assertEqual(ret, 0)
-                self.assertTrue(os.path.exists(out_path))
-                with open(out_path, "r", encoding="utf-8") as f:
-                    rows = list(csv.DictReader(f))
-                    self.assertGreaterEqual(len(rows), 5)
+            input_path = os.path.join(tmpdir, "empty.csv")
+            with open(input_path, "w", encoding="utf-8") as handle:
+                handle.write("serum_calcium,serum_phosphate\n")
+            self.assertEqual(cli.process_batch_csv(input_path), 1)
 
 
 if __name__ == "__main__":
